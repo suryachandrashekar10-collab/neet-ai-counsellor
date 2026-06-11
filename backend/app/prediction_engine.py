@@ -10,12 +10,16 @@ Probability model uses:
 Tier classification is based on R1 closing rank (most important round).
 """
 
-import pyodbc
+import os
+import psycopg2
+import psycopg2.extras
 from dataclasses import dataclass, field
 from statistics import stdev
 
-SQL_SERVER = r"localhost\SQLEXPRESS"
-DB_NAME    = "neet_counsellor"
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://postgres:NeuraNeet2026@db.sthzhfurxnvtcpovecsu.supabase.co:5432/postgres"
+)
 
 ROUND_WEIGHTS  = {"R1": 0.40, "R2": 0.30, "R3": 0.20, "R4": 0.10}
 CATEGORY_TO_SM = {           # maps allotment category → seat_matrix column
@@ -33,12 +37,7 @@ CATEGORY_TO_SM = {           # maps allotment category → seat_matrix column
 
 
 def get_conn():
-    return pyodbc.connect(
-        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-        f"SERVER={SQL_SERVER};"
-        f"DATABASE={DB_NAME};"
-        f"Trusted_Connection=yes;"
-    )
+    return psycopg2.connect(DATABASE_URL, connect_timeout=30)
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -204,20 +203,16 @@ def predict(
         top_n       : Max colleges per tier
     """
     conn = get_conn()
-    cur  = conn.cursor()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # Categories to query: student's own category + OPEN (reserved students
     # can fill open seats if their rank qualifies)
     categories = [category] if category == "OPEN" else [category, "OPEN"]
-    wq_val = 1 if women_quota else 0
+    wq_val = women_quota  # PostgreSQL boolean
     sm_col = CATEGORY_TO_SM.get(category, "open_seats")
 
-    placeholders = ",".join("?" * len(categories))
+    placeholders = ",".join(["%s"] * len(categories))
 
-    # Fetch all round cutoffs for these categories.
-    # total_seats = GEN seats + WOM seats for the matching round
-    # (women can fill both GEN and WOM seats; men only GEN)
-    # Use state_pool-aware totals and filter out bad seat matrix rows (seats > state_pool)
     cur.execute(f"""
         SELECT
             c.college_code, c.college_name, c.category,
@@ -225,23 +220,18 @@ def predict(
             c.opening_rank, c.closing_rank, c.seats_filled,
             COALESCE(sm_g.section, 'UNKNOWN') AS section,
             sm_g.state_pool,
-            -- GEN category seats
             COALESCE(sm_g.{sm_col}, 0) AS gen_cat_seats,
-            -- WOM category seats (only relevant for female students)
             COALESCE(sm_w.{sm_col}, 0) AS wom_cat_seats,
-            -- Combined total seats for this category
             COALESCE(sm_g.{sm_col}, 0) +
-                CASE WHEN ? = 1 THEN COALESCE(sm_w.{sm_col}, 0) ELSE 0 END
+                CASE WHEN %s THEN COALESCE(sm_w.{sm_col}, 0) ELSE 0 END
                 AS total_cat_seats
         FROM cutoffs c
-        -- Join GEN row of seat_matrix for the SAME round
         LEFT JOIN seat_matrix sm_g
             ON  sm_g.college_code = c.college_code
             AND sm_g.round        = c.round
             AND sm_g.row_type     = 'GEN'
             AND sm_g.year         = c.year
-            AND sm_g.{sm_col}     <= COALESCE(sm_g.state_pool, 9999)  -- filter bad rows
-        -- Join WOM row for combined capacity
+            AND sm_g.{sm_col}     <= COALESCE(sm_g.state_pool, 9999)
         LEFT JOIN seat_matrix sm_w
             ON  sm_w.college_code = c.college_code
             AND sm_w.round        = c.round
@@ -249,8 +239,8 @@ def predict(
             AND sm_w.year         = c.year
             AND sm_w.{sm_col}     <= COALESCE(sm_w.state_pool, 9999)
         WHERE c.category     IN ({placeholders})
-          AND c.women_quota  = ?
-          AND c.year         = ?
+          AND c.women_quota  = %s
+          AND c.year         = %s
           AND c.closing_rank IS NOT NULL
         ORDER BY c.college_code, c.category, c.round
     """, (wq_val, *categories, wq_val, year))
@@ -266,20 +256,19 @@ def predict(
     })
 
     for row in rows:
-        key = (row.college_code, row.category, bool(row.women_quota))
+        key = (row["college_code"], row["category"], bool(row["women_quota"]))
         g = groups[key]
-        g["college_name"] = row.college_name or "Unknown"
-        g["section"]      = row.section
-        g["state_pool"]   = row.state_pool or 0
-        # Use R1 total seats as baseline capacity (most complete data)
-        if row.round == "R1" and row.total_cat_seats:
-            g["total_seats"] = row.total_cat_seats
-        elif not g["total_seats"] and row.total_cat_seats:
-            g["total_seats"] = row.total_cat_seats
-        g["rounds"][row.round] = RoundData(
-            round        = row.round,
-            closing_rank = row.closing_rank,
-            seats_filled = row.seats_filled,
+        g["college_name"] = row["college_name"] or "Unknown"
+        g["section"]      = row["section"]
+        g["state_pool"]   = row["state_pool"] or 0
+        if row["round"] == "R1" and row["total_cat_seats"]:
+            g["total_seats"] = row["total_cat_seats"]
+        elif not g["total_seats"] and row["total_cat_seats"]:
+            g["total_seats"] = row["total_cat_seats"]
+        g["rounds"][row["round"]] = RoundData(
+            round        = row["round"],
+            closing_rank = row["closing_rank"],
+            seats_filled = row["seats_filled"] or 0,
         )
 
     result = PredictionResult(
@@ -311,6 +300,11 @@ def predict(
                         list(rounds.values())[0].seats_filled
         fill_rate              = _compute_fill_rate(r1_filled, g["total_seats"])
         round_prob, per_round  = _compute_round_probability(student_air, rounds)
+
+        # Skip colleges the student cannot get into in any round
+        if round_prob == 0:
+            continue
+
         confidence             = min(1.0, len([r for r in rounds if r in ROUND_WEIGHTS]) / 3)
         final_prob             = _final_probability(round_prob, fill_rate, movement, confidence, per_round)
 

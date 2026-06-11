@@ -1,17 +1,25 @@
+import os
+import psycopg2
+import psycopg2.extras
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
-from prediction_engine import predict, CollegeRecommendation
+from app.prediction_engine import predict, CollegeRecommendation, DATABASE_URL
 
 app = FastAPI(
     title="NEET Maharashtra CAP Counsellor API",
     version="1.0.0",
 )
 
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:5174"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5174"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -144,41 +152,29 @@ def predict_colleges(req: PredictRequest):
 
 @app.get("/colleges")
 def list_colleges(year: int = 2025):
-    """Return all colleges with their seat matrix info."""
-    import pyodbc
-    conn = pyodbc.connect(
-        "DRIVER={ODBC Driver 17 for SQL Server};"
-        r"SERVER=localhost\SQLEXPRESS;"
-        "DATABASE=neet_counsellor;Trusted_Connection=yes;"
-    )
-    cur = conn.cursor()
+    conn = psycopg2.connect(DATABASE_URL, connect_timeout=30)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT DISTINCT college_code, college_name, section
         FROM seat_matrix
-        WHERE round = 'R1' AND year = ? AND row_type = 'GEN'
+        WHERE round = 'R1' AND year = %s AND row_type = 'GEN'
         ORDER BY college_code
     """, (year,))
     rows = cur.fetchall()
     conn.close()
-    return [{"code": r.college_code, "name": r.college_name,
-             "section": r.section} for r in rows]
+    return [{"code": r["college_code"], "name": r["college_name"],
+             "section": r["section"]} for r in rows]
 
 
 @app.get("/cutoffs/{college_code}")
 def college_cutoffs(college_code: str, year: int = 2025):
-    """Return all cutoff data for a specific college across rounds and categories."""
-    import pyodbc
-    conn = pyodbc.connect(
-        "DRIVER={ODBC Driver 17 for SQL Server};"
-        r"SERVER=localhost\SQLEXPRESS;"
-        "DATABASE=neet_counsellor;Trusted_Connection=yes;"
-    )
-    cur = conn.cursor()
+    conn = psycopg2.connect(DATABASE_URL, connect_timeout=30)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT category, women_quota, round,
                opening_rank, closing_rank, seats_filled
         FROM cutoffs
-        WHERE college_code = ? AND year = ?
+        WHERE college_code = %s AND year = %s
         ORDER BY category, women_quota, round
     """, (college_code.upper(), year))
     rows = cur.fetchall()
@@ -187,12 +183,12 @@ def college_cutoffs(college_code: str, year: int = 2025):
         raise HTTPException(status_code=404, detail=f"No data for college {college_code}")
     return [
         {
-            "category":     r.category,
-            "women_quota":  bool(r.women_quota),
-            "round":        r.round,
-            "opening_rank": r.opening_rank,
-            "closing_rank": r.closing_rank,
-            "seats_filled": r.seats_filled,
+            "category":     r["category"],
+            "women_quota":  bool(r["women_quota"]),
+            "round":        r["round"],
+            "opening_rank": r["opening_rank"],
+            "closing_rank": r["closing_rank"],
+            "seats_filled": r["seats_filled"],
         }
         for r in rows
     ]
