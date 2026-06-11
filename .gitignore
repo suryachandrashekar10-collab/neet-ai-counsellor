@@ -18,6 +18,8 @@ build/
 # Data (raw PDFs are large, don't commit)
 data/raw/
 data/embeddings/
+data/parsed/
+data/*.db
 
 # Node
 node_modules/
