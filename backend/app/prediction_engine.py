@@ -18,7 +18,7 @@ from statistics import stdev
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://postgres:NeuraNeet2026@db.sthzhfurxnvtcpovecsu.supabase.co:5432/postgres"
+    "postgresql://postgres:fUojvnciuyvraziVJGIDZkATzyCybGsA@postgres.railway.internal:5432/railway"
 )
 
 ROUND_WEIGHTS  = {"R1": 0.40, "R2": 0.30, "R3": 0.20, "R4": 0.10}

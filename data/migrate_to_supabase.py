@@ -8,7 +8,7 @@ import psycopg2
 import psycopg2.extras
 
 # ── FILL THIS IN ──────────────────────────────────────────────────────────────
-SUPABASE_URL = "postgresql://postgres:NeuraNeet2026@db.sthzhfurxnvtcpovecsu.supabase.co:5432/postgres"
+SUPABASE_URL = "postgresql://postgres:fUojvnciuyvraziVJGIDZkATzyCybGsA@acela.proxy.rlwy.net:53271/railway"
 # ─────────────────────────────────────────────────────────────────────────────
 
 BATCH = 1000
