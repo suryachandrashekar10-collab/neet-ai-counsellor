@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
-from app.prediction_engine import predict, CollegeRecommendation, DATABASE_URL
+from app.prediction_engine import predict, CollegeRecommendation, DATABASE_URL, _IS_PG, get_conn, get_cursor, row_get
 
 app = FastAPI(
     title="NEET Maharashtra CAP Counsellor API",
@@ -147,29 +147,31 @@ def predict_colleges(req: PredictRequest):
 
 @app.get("/colleges")
 def list_colleges(year: int = 2025):
-    conn = psycopg2.connect(DATABASE_URL, connect_timeout=30)
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""
+    conn = get_conn()
+    cur = get_cursor(conn)
+    ph = "%s" if _IS_PG else "?"
+    cur.execute(f"""
         SELECT DISTINCT college_code, college_name, section
         FROM seat_matrix
-        WHERE round = 'R1' AND year = %s AND row_type = 'GEN'
+        WHERE round = 'R1' AND year = {ph} AND row_type = 'GEN'
         ORDER BY college_code
     """, (year,))
     rows = cur.fetchall()
     conn.close()
-    return [{"code": r["college_code"], "name": r["college_name"],
-             "section": r["section"]} for r in rows]
+    return [{"code": row_get(r,"college_code"), "name": row_get(r,"college_name"),
+             "section": row_get(r,"section")} for r in rows]
 
 
 @app.get("/cutoffs/{college_code}")
 def college_cutoffs(college_code: str, year: int = 2025):
-    conn = psycopg2.connect(DATABASE_URL, connect_timeout=30)
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""
+    conn = get_conn()
+    cur = get_cursor(conn)
+    ph = "%s" if _IS_PG else "?"
+    cur.execute(f"""
         SELECT category, women_quota, round,
                opening_rank, closing_rank, seats_filled
         FROM cutoffs
-        WHERE college_code = %s AND year = %s
+        WHERE college_code = {ph} AND year = {ph}
         ORDER BY category, women_quota, round
     """, (college_code.upper(), year))
     rows = cur.fetchall()
@@ -178,12 +180,12 @@ def college_cutoffs(college_code: str, year: int = 2025):
         raise HTTPException(status_code=404, detail=f"No data for college {college_code}")
     return [
         {
-            "category":     r["category"],
-            "women_quota":  bool(r["women_quota"]),
-            "round":        r["round"],
-            "opening_rank": r["opening_rank"],
-            "closing_rank": r["closing_rank"],
-            "seats_filled": r["seats_filled"],
+            "category":     row_get(r,"category"),
+            "women_quota":  bool(row_get(r,"women_quota")),
+            "round":        row_get(r,"round"),
+            "opening_rank": row_get(r,"opening_rank"),
+            "closing_rank": row_get(r,"closing_rank"),
+            "seats_filled": row_get(r,"seats_filled"),
         }
         for r in rows
     ]

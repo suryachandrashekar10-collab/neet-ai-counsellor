@@ -16,10 +16,29 @@ import psycopg2.extras
 from dataclasses import dataclass, field
 from statistics import stdev
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://postgres:fUojvnciuyvraziVJGIDZkATzyCybGsA@postgres.railway.internal:5432/railway"
-)
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+_IS_PG = bool(DATABASE_URL)
+
+def get_conn():
+    if _IS_PG:
+        return psycopg2.connect(DATABASE_URL, connect_timeout=30)
+    import pyodbc
+    return pyodbc.connect(
+        "DRIVER={ODBC Driver 17 for SQL Server};"
+        r"SERVER=localhost\SQLEXPRESS;"
+        "DATABASE=neet_counsellor;Trusted_Connection=yes;"
+    )
+
+def get_cursor(conn):
+    if _IS_PG:
+        return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    return conn.cursor()
+
+def row_get(row, key):
+    """Dict-style access for psycopg2 RealDictRow, attr-style for pyodbc Row."""
+    if _IS_PG:
+        return row[key]
+    return getattr(row, key)
 
 ROUND_WEIGHTS  = {"R1": 0.40, "R2": 0.30, "R3": 0.20, "R4": 0.10}
 CATEGORY_TO_SM = {           # maps allotment category → seat_matrix column
@@ -34,10 +53,6 @@ CATEGORY_TO_SM = {           # maps allotment category → seat_matrix column
     "EWS":  "ews_seats",
     "OPEN": "open_seats",
 }
-
-
-def get_conn():
-    return psycopg2.connect(DATABASE_URL, connect_timeout=30)
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -203,15 +218,18 @@ def predict(
         top_n       : Max colleges per tier
     """
     conn = get_conn()
-    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur  = get_cursor(conn)
 
-    # Categories to query: student's own category + OPEN (reserved students
-    # can fill open seats if their rank qualifies)
     categories = [category] if category == "OPEN" else [category, "OPEN"]
-    wq_val = women_quota  # PostgreSQL boolean
+    wq_val = women_quota
     sm_col = CATEGORY_TO_SM.get(category, "open_seats")
 
-    placeholders = ",".join(["%s"] * len(categories))
+    if _IS_PG:
+        placeholders = ",".join(["%s"] * len(categories))
+        ph = "%s"
+    else:
+        placeholders = ",".join(["?"] * len(categories))
+        ph = "?"
 
     cur.execute(f"""
         SELECT
@@ -223,7 +241,7 @@ def predict(
             COALESCE(sm_g.{sm_col}, 0) AS gen_cat_seats,
             COALESCE(sm_w.{sm_col}, 0) AS wom_cat_seats,
             COALESCE(sm_g.{sm_col}, 0) +
-                CASE WHEN %s THEN COALESCE(sm_w.{sm_col}, 0) ELSE 0 END
+                CASE WHEN {ph} = {1 if not _IS_PG else 'TRUE'} THEN COALESCE(sm_w.{sm_col}, 0) ELSE 0 END
                 AS total_cat_seats
         FROM cutoffs c
         LEFT JOIN seat_matrix sm_g
@@ -239,8 +257,8 @@ def predict(
             AND sm_w.year         = c.year
             AND sm_w.{sm_col}     <= COALESCE(sm_w.state_pool, 9999)
         WHERE c.category     IN ({placeholders})
-          AND c.women_quota  = %s
-          AND c.year         = %s
+          AND c.women_quota  = {ph}
+          AND c.year         = {ph}
           AND c.closing_rank IS NOT NULL
         ORDER BY c.college_code, c.category, c.round
     """, (wq_val, *categories, wq_val, year))
@@ -256,19 +274,21 @@ def predict(
     })
 
     for row in rows:
-        key = (row["college_code"], row["category"], bool(row["women_quota"]))
+        key = (row_get(row,"college_code"), row_get(row,"category"), bool(row_get(row,"women_quota")))
         g = groups[key]
-        g["college_name"] = row["college_name"] or "Unknown"
-        g["section"]      = row["section"]
-        g["state_pool"]   = row["state_pool"] or 0
-        if row["round"] == "R1" and row["total_cat_seats"]:
-            g["total_seats"] = row["total_cat_seats"]
-        elif not g["total_seats"] and row["total_cat_seats"]:
-            g["total_seats"] = row["total_cat_seats"]
-        g["rounds"][row["round"]] = RoundData(
-            round        = row["round"],
-            closing_rank = row["closing_rank"],
-            seats_filled = row["seats_filled"] or 0,
+        g["college_name"] = row_get(row,"college_name") or "Unknown"
+        g["section"]      = row_get(row,"section")
+        g["state_pool"]   = row_get(row,"state_pool") or 0
+        total = row_get(row,"total_cat_seats")
+        rnd   = row_get(row,"round")
+        if rnd == "R1" and total:
+            g["total_seats"] = total
+        elif not g["total_seats"] and total:
+            g["total_seats"] = total
+        g["rounds"][rnd] = RoundData(
+            round        = rnd,
+            closing_rank = row_get(row,"closing_rank"),
+            seats_filled = row_get(row,"seats_filled") or 0,
         )
 
     result = PredictionResult(
