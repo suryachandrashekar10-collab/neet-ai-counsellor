@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { type PredictResponse, type College, SECTION_LABEL, CATEGORY_LABELS } from "@/lib/api";
+import FilterBar, { type Filters, DEFAULT_FILTERS } from "@/components/FilterBar";
 
 interface Props {
   result: PredictResponse;
@@ -224,8 +225,40 @@ function TopPicks({ result }: { result: PredictResponse }) {
   );
 }
 
+function applyFilters(colleges: College[], filters: Filters): College[] {
+  let list = [...colleges];
+
+  // Course filter
+  if (filters.course !== "ALL") {
+    list = list.filter((c) => c.section.includes(filters.course));
+  }
+
+  // College type filter
+  if (filters.collegeType !== "ALL") {
+    list = list.filter((c) => c.section.startsWith(filters.collegeType));
+  }
+
+  // Sort
+  list.sort((a, b) => {
+    switch (filters.sortBy) {
+      case "r1_closing":    return a.r1_closing - b.r1_closing;
+      case "fill_rate":     return b.fill_rate - a.fill_rate;
+      case "name":          return a.college_name.localeCompare(b.college_name);
+      default:              return b.final_probability - a.final_probability;
+    }
+  });
+
+  return list;
+}
+
 export default function ResultsPanel({ result, onReset }: Props) {
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const catLabel = CATEGORY_LABELS[result.category] ?? result.category;
+
+  const filteredSafe       = useMemo(() => applyFilters(result.safe,       filters), [result.safe,       filters]);
+  const filteredModerate   = useMemo(() => applyFilters(result.moderate,   filters), [result.moderate,   filters]);
+  const filteredAggressive = useMemo(() => applyFilters(result.aggressive, filters), [result.aggressive, filters]);
+  const totalShown = filteredSafe.length + filteredModerate.length + filteredAggressive.length;
 
   return (
     <div className="space-y-4">
@@ -252,14 +285,22 @@ export default function ResultsPanel({ result, onReset }: Props) {
       {/* Top 5 best bets */}
       <TopPicks result={result} />
 
-      {/* Tier sections */}
-      <TierSection title="Safe"       colleges={result.safe}       defaultOpen={true} />
-      <TierSection title="Moderate"   colleges={result.moderate}   defaultOpen={true} />
-      <TierSection title="Aggressive" colleges={result.aggressive} defaultOpen={false} />
+      {/* Filter bar */}
+      <FilterBar
+        filters={filters}
+        onChange={setFilters}
+        totalShown={totalShown}
+        totalAll={result.total_options}
+      />
 
-      {result.total_options === 0 && (
+      {/* Tier sections */}
+      <TierSection title="Safe"       colleges={filteredSafe}       defaultOpen={true} />
+      <TierSection title="Moderate"   colleges={filteredModerate}   defaultOpen={true} />
+      <TierSection title="Aggressive" colleges={filteredAggressive} defaultOpen={false} />
+
+      {totalShown === 0 && (
         <div className="text-center py-12 text-slate-500">
-          No colleges found in range for AIR {result.student_air.toLocaleString()} · {catLabel}
+          No colleges match your filters. Try changing Course or Type.
         </div>
       )}
     </div>
