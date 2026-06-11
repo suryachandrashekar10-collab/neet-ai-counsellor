@@ -67,6 +67,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   D1: "Defence (D1)",
   D2: "Defence (D2)",
   D3: "Defence (D3)",
+  PWD: "PWD (Physically Disabled)",
 };
 
 export async function predict(req: PredictRequest): Promise<PredictResponse> {
@@ -85,8 +86,35 @@ export async function predict(req: PredictRequest): Promise<PredictResponse> {
 export const CATEGORIES = [
   "OPEN", "OBC", "SEBC", "SC", "ST",
   "EWS", "VJA", "NTB", "NTC", "NTD",
-  "HA", "D1", "D2", "D3",
+  "HA", "D1", "D2", "D3", "PWD",
 ];
+
+export interface CollegeListItem {
+  code: string;
+  name: string;
+  section: string;
+}
+
+export interface CutoffRow {
+  category: string;
+  women_quota: boolean;
+  round: string;
+  opening_rank: number;
+  closing_rank: number;
+  seats_filled: number;
+}
+
+export async function fetchColleges(year = 2025): Promise<CollegeListItem[]> {
+  const res = await fetch(`${API_BASE}/colleges?year=${year}`);
+  if (!res.ok) throw new Error("Failed to fetch colleges");
+  return res.json();
+}
+
+export async function fetchCutoffs(collegeCode: string, year = 2025): Promise<CutoffRow[]> {
+  const res = await fetch(`${API_BASE}/cutoffs/${collegeCode}?year=${year}`);
+  if (!res.ok) throw new Error("Failed to fetch cutoffs");
+  return res.json();
+}
 
 export const SECTION_LABEL: Record<string, string> = {
   GOVT_MBBS: "Govt MBBS",

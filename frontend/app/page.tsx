@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { predict, type PredictResponse } from "@/lib/api";
 import SearchForm from "@/components/SearchForm";
 import ResultsPanel from "@/components/ResultsPanel";
@@ -30,10 +31,13 @@ export default function Home() {
       <header className="border-b border-slate-700 bg-slate-900/80 backdrop-blur sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">MH</div>
-          <div>
+          <div className="flex-1">
             <h1 className="text-base font-semibold leading-tight">NEET Maharashtra CAP Counsellor</h1>
             <p className="text-xs text-slate-400">Predict your college admission chances · 2025 data</p>
           </div>
+          <Link href="/tracker" className="text-xs text-slate-400 hover:text-white transition-colors border border-slate-700 rounded-lg px-3 py-1.5">
+            College Tracker →
+          </Link>
         </div>
       </header>
 
