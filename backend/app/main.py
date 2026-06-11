@@ -23,7 +23,7 @@ app.add_middleware(
 
 VALID_CATEGORIES = {
     "OPEN", "OBC", "SC", "ST", "SEBC", "EWS",
-    "VJA", "NTB", "NTC", "NTD", "HA", "D1", "D2", "D3"
+    "VJA", "NTB", "NTC", "NTD", "HA", "D1", "D2", "D3", "PWD"
 }
 
 class PredictRequest(BaseModel):

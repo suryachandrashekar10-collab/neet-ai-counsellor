@@ -52,6 +52,7 @@ CATEGORY_TO_SM = {           # maps allotment category → seat_matrix column
     "SEBC": "sebc_seats",
     "EWS":  "ews_seats",
     "OPEN": "open_seats",
+    "PWD":  "open_seats",   # PWD students compete across open pool seats
 }
 
 
@@ -220,7 +221,7 @@ def predict(
     conn = get_conn()
     cur  = get_cursor(conn)
 
-    categories = [category] if category == "OPEN" else [category, "OPEN"]
+    categories = [category] if category in ("OPEN", "PWD") else [category, "OPEN"]
     wq_val = women_quota
     sm_col = CATEGORY_TO_SM.get(category, "open_seats")
 
