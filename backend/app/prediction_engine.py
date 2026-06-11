@@ -70,6 +70,12 @@ class CollegeRecommendation:
     confidence:       float      # 0-1 based on data completeness
     final_probability: float     # combined score
     tier:             str        # Safe / Moderate / Aggressive
+    # Per-round cleared flags
+    r1_cleared:       bool = False
+    r2_cleared:       bool = False
+    r3_cleared:       bool = False
+    r4_cleared:       bool = False
+    earliest_round:   str  = ""   # earliest round student can get in
 
 
 @dataclass
@@ -100,18 +106,25 @@ class PredictionResult:
 # ── Core prediction logic ─────────────────────────────────────────────────────
 
 def _compute_round_probability(student_air: int,
-                                rounds: dict[str, RoundData]) -> float:
-    """Weighted probability: fraction of rounds where student clears cutoff."""
+                                rounds: dict[str, RoundData]) -> tuple[float, dict[str, bool]]:
+    """
+    Weighted probability + per-round cleared flags.
+    Returns (weighted_prob, {round: cleared_bool})
+    """
     total_w = 0.0
     cleared_w = 0.0
+    per_round: dict[str, bool] = {}
     for rnd, data in rounds.items():
         w = ROUND_WEIGHTS.get(rnd, 0)
         if w == 0:
             continue
         total_w += w
-        if student_air <= data.closing_rank:
+        cleared = student_air <= data.closing_rank
+        per_round[rnd] = cleared
+        if cleared:
             cleared_w += w
-    return round(cleared_w / total_w, 3) if total_w > 0 else 0.0
+    prob = round(cleared_w / total_w, 3) if total_w > 0 else 0.0
+    return prob, per_round
 
 
 def _compute_fill_rate(seats_filled: int, total_seats: int) -> float:
@@ -135,33 +148,42 @@ def _classify_tier(student_air: int, r1_closing: int) -> str:
 
 
 def _final_probability(round_prob: float, fill_rate: float,
-                       movement: int, confidence: float) -> float:
+                       movement: int, confidence: float,
+                       per_round: dict[str, bool]) -> float:
     """
-    Combine all signals into a final probability score.
+    Combine all signals into a realistic probability score (max 92%).
 
-    round_prob  : 0-1, fraction of rounds cleared (main signal)
-    fill_rate   : 0-1, how full the college typically is (high = competitive)
-    movement    : positive = seats opened up in later rounds (helps borderline students)
-    confidence  : 0-1, data completeness
+    round_prob  : weighted fraction of rounds cleared
+    fill_rate   : seats_filled / total_seats
+    movement    : seats opened in later rounds (positive = more opportunity)
+    confidence  : data completeness (more rounds = higher confidence)
+    per_round   : which specific rounds the student clears
     """
-    # Base: round probability weighted by confidence
+    # Penalty if student only qualifies in later rounds (R3/R4 only)
+    # Those seats have already been partially filled by earlier rounds
+    r1_ok = per_round.get("R1", False)
+    r2_ok = per_round.get("R2", False)
+    early_rounds = r1_ok or r2_ok
+
+    # Base score weighted by confidence
     base = round_prob * confidence + round_prob * (1 - confidence) * 0.5
 
-    # Movement bonus: if seats open up in later rounds, boost slightly for borderline
-    movement_factor = 1.0
-    if movement > 0 and round_prob < 0.5:
-        # Seats opened up historically — small boost
-        movement_factor = min(1.2, 1.0 + (movement / 200000))
+    # If student only qualifies from R3 onwards, seats are fewer and competition higher
+    if not early_rounds and round_prob > 0:
+        base = base * 0.65   # late-round penalty
 
-    score = base * movement_factor
+    # Movement bonus for borderline students
+    if movement > 0 and round_prob < 0.6:
+        base = min(base * 1.15, base + 0.08)
 
-    # Fill rate adjustment: very low fill rate = easier than rank suggests
-    if fill_rate < 0.5:
-        score = min(1.0, score * 1.1)
+    # Fill rate adjustment
+    if fill_rate < 0.4:
+        base = min(base * 1.08, base + 0.05)   # underfilled = easier
     elif fill_rate > 0.95:
-        score = score * 0.95  # very competitive college
+        base = base * 0.93                       # overfull = competitive
 
-    return round(min(1.0, max(0.0, score)), 3)
+    # Hard cap — never show 100%, there's always uncertainty
+    return round(min(0.92, max(0.0, base)), 3)
 
 
 def predict(
@@ -287,10 +309,15 @@ def predict(
 
         r1_filled     = rounds["R1"].seats_filled if "R1" in rounds else \
                         list(rounds.values())[0].seats_filled
-        fill_rate     = _compute_fill_rate(r1_filled, g["total_seats"])
-        round_prob    = _compute_round_probability(student_air, rounds)
-        confidence    = min(1.0, len([r for r in rounds if r in ROUND_WEIGHTS]) / 3)
-        final_prob    = _final_probability(round_prob, fill_rate, movement, confidence)
+        fill_rate              = _compute_fill_rate(r1_filled, g["total_seats"])
+        round_prob, per_round  = _compute_round_probability(student_air, rounds)
+        confidence             = min(1.0, len([r for r in rounds if r in ROUND_WEIGHTS]) / 3)
+        final_prob             = _final_probability(round_prob, fill_rate, movement, confidence, per_round)
+
+        # Earliest round the student can get in
+        earliest = next(
+            (r for r in ["R1", "R2", "R3", "R4"] if per_round.get(r)), ""
+        )
 
         rec = CollegeRecommendation(
             college_code      = code,
@@ -309,6 +336,11 @@ def predict(
             confidence        = confidence,
             final_probability = final_prob,
             tier              = tier,
+            r1_cleared        = per_round.get("R1", False),
+            r2_cleared        = per_round.get("R2", False),
+            r3_cleared        = per_round.get("R3", False),
+            r4_cleared        = per_round.get("R4", False),
+            earliest_round    = earliest,
         )
 
         if tier == "Safe":

@@ -22,6 +22,11 @@ export interface College {
   final_probability: number;
   tier: "Safe" | "Moderate" | "Aggressive";
   rounds: Record<string, RoundInfo>;
+  r1_cleared: boolean;
+  r2_cleared: boolean;
+  r3_cleared: boolean;
+  r4_cleared: boolean;
+  earliest_round: string;
 }
 
 export interface PredictResponse {
@@ -45,6 +50,24 @@ export interface PredictRequest {
   year?: number;
   top_n?: number;
 }
+
+// Display label for category codes
+export const CATEGORY_LABELS: Record<string, string> = {
+  OPEN: "General (OPEN)",
+  OBC: "OBC",
+  SEBC: "SEBC",
+  SC: "SC",
+  ST: "ST",
+  EWS: "EWS",
+  VJA: "VJ-A (Vimukta Jati)",
+  NTB: "NT-B",
+  NTC: "NT-C",
+  NTD: "NT-D",
+  HA: "HA (Hearing Impaired)",
+  D1: "Defence (D1)",
+  D2: "Defence (D2)",
+  D3: "Defence (D3)",
+};
 
 export async function predict(req: PredictRequest): Promise<PredictResponse> {
   const res = await fetch(`${API_BASE}/predict`, {

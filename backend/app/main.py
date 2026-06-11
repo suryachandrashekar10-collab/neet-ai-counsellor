@@ -11,7 +11,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:5174"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -51,6 +51,11 @@ class CollegeOut(BaseModel):
     final_probability: float
     tier:              str
     rounds:            dict[str, RoundInfo]
+    r1_cleared:        bool
+    r2_cleared:        bool
+    r3_cleared:        bool
+    r4_cleared:        bool
+    earliest_round:    str
 
 class PredictResponse(BaseModel):
     student_air:     int
@@ -91,6 +96,11 @@ def college_to_out(c: CollegeRecommendation) -> CollegeOut:
             )
             for r, d in c.rounds.items()
         },
+        r1_cleared        = c.r1_cleared,
+        r2_cleared        = c.r2_cleared,
+        r3_cleared        = c.r3_cleared,
+        r4_cleared        = c.r4_cleared,
+        earliest_round    = c.earliest_round,
     )
 
 # ── Routes ────────────────────────────────────────────────────────────────────
