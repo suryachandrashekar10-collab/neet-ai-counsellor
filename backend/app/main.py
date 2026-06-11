@@ -147,15 +147,25 @@ def predict_colleges(req: PredictRequest):
 
 @app.get("/colleges")
 def list_colleges(year: int = 2025):
+    """Return distinct colleges from cutoffs — uses allotment names students recognise."""
     conn = get_conn()
     cur = get_cursor(conn)
     ph = "%s" if _IS_PG else "?"
+    # Pull from cutoffs (allotment-style popular names) joined with seat_matrix for section
     cur.execute(f"""
-        SELECT DISTINCT college_code, college_name, section
-        FROM seat_matrix
-        WHERE round = 'R1' AND year = {ph} AND row_type = 'GEN'
-        ORDER BY college_code
-    """, (year,))
+        SELECT
+            c.college_code,
+            MAX(c.college_name) AS college_name,
+            COALESCE(MAX(sm.section), 'UNKNOWN') AS section
+        FROM cutoffs c
+        LEFT JOIN seat_matrix sm
+            ON sm.college_code = c.college_code
+            AND sm.row_type = 'GEN'
+            AND sm.year = {ph}
+        WHERE c.year = {ph}
+        GROUP BY c.college_code
+        ORDER BY c.college_code
+    """, (year, year))
     rows = cur.fetchall()
     conn.close()
     return [{"code": row_get(r,"college_code"), "name": row_get(r,"college_name"),
